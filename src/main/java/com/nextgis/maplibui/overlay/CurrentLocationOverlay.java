@@ -256,6 +256,12 @@ public class CurrentLocationOverlay extends Overlay implements GpsEventListener 
         }
     }
 
+    @Override
+    public void onLocationUnavailable() {
+        mCurrentLocation = mInitialLocation = null;
+        mMapViewOverlays.postInvalidate();
+    }
+
     double getPanThreshold() {
         double dMinX = -mTolerancePX;
         double dMaxX = +mTolerancePX;

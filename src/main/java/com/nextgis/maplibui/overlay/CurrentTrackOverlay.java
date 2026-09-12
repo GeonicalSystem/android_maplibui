@@ -44,6 +44,8 @@ import com.nextgis.maplibui.util.ControlHelper;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.HashSet;
 
 
 public class CurrentTrackOverlay
@@ -53,6 +55,7 @@ public class CurrentTrackOverlay
     private final Uri            mContentUriTracks;
     private       Paint          mPaint;
     private       List<GeoPoint> mTrackpoints;
+    private final Set<Integer> mSegmentStarts = new HashSet<>();
 
     String[] mProjection = new String[] {TrackLayer.FIELD_ID};
     String   mSelection  = TrackLayer.FIELD_VISIBLE + " = 1 AND (" + TrackLayer.FIELD_END +
@@ -106,6 +109,7 @@ public class CurrentTrackOverlay
         float x0, y0, x1, y1;
 
         for (int i = 1; i < mTrackpoints.size(); i++) {
+            if (mSegmentStarts.contains(i)) continue;
             x0 = (float) mTrackpoints.get(i - 1).getX() - currentMouseOffset.x;
             y0 = (float) mTrackpoints.get(i - 1).getY() - currentMouseOffset.y;
             x1 = (float) mTrackpoints.get(i).getX() - currentMouseOffset.x;
@@ -143,7 +147,7 @@ public class CurrentTrackOverlay
             x1 = (float) (mTrackpoints.get(i).getX() - (1 - scale) * dx);
             y1 = (float) (mTrackpoints.get(i).getY() - (1 - scale) * dy);
 
-            canvas.drawLine(x0, y0, x1, y1, mPaint);
+            if (!mSegmentStarts.contains(i)) canvas.drawLine(x0, y0, x1, y1, mPaint);
             x0 = x1;
             y0 = y1;
         }
@@ -156,16 +160,17 @@ public class CurrentTrackOverlay
             MapDrawable mapDrawable)
     {
         mTrackpoints.clear();
+        mSegmentStarts.clear();
 
         if (mCursor == null || mCursor.getCount() == 0 || !mCursor.moveToFirst()) {
             return;
         }
 
         String id = mCursor.getString(0);
-        String[] proj = new String[] {TrackLayer.FIELD_LON, TrackLayer.FIELD_LAT};
+        String[] proj = new String[] {TrackLayer.FIELD_LON, TrackLayer.FIELD_LAT, TrackLayer.FIELD_SEGMENT};
 
         try {
-            Cursor track = mContext.get().getContentResolver().query(Uri.withAppendedPath(mContentUriTracks, id), proj, null, null, null);
+            Cursor track = mContext.get().getContentResolver().query(Uri.withAppendedPath(mContentUriTracks, id), proj, null, null, TrackLayer.POINT_ORDER);
 
             if (track == null) {
                 return;
@@ -181,37 +186,25 @@ public class CurrentTrackOverlay
 
 
     private void drawTrack(Cursor track, MapDrawable mapDrawable, Canvas canvas) {
-        if (track.moveToFirst()) {
-            float x0 = track.getFloat(track.getColumnIndex(TrackLayer.FIELD_LON)),
-                    y0 = track.getFloat(track.getColumnIndex(TrackLayer.FIELD_LAT)), x1, y1;
-            GeoPoint point;
-            point = new GeoPoint(x0, y0);
+        int previousSegment = Integer.MIN_VALUE;
+        GeoPoint previous = null;
+        while (track.moveToNext()) {
+            int segment = track.getInt(track.getColumnIndexOrThrow(TrackLayer.FIELD_SEGMENT));
+            GeoPoint point = new GeoPoint(track.getDouble(track.getColumnIndexOrThrow(TrackLayer.FIELD_LON)),
+                    track.getDouble(track.getColumnIndexOrThrow(TrackLayer.FIELD_LAT)));
             point.setCRS(GeoConstants.CRS_WEB_MERCATOR);
-
-            GeoPoint mts = mapDrawable.mapToScreen(point);
-            x0 = (float) (mts.getX());
-            y0 = (float) (mts.getY());
-
-            while (track.moveToNext()) {
-                x1 = track.getFloat(track.getColumnIndex(TrackLayer.FIELD_LON));
-                y1 = track.getFloat(track.getColumnIndex(TrackLayer.FIELD_LAT));
-
-                point = new GeoPoint(x1, y1);
-                point.setCRS(GeoConstants.CRS_WEB_MERCATOR);
-
-                mts = mapDrawable.mapToScreen(point);
-
-                canvas.drawLine(x0, y0, (float) mts.getX(), (float) mts.getY(), mPaint);
-
-                mTrackpoints.add(new GeoPoint(x0, y0));
-                x0 = (float) (mts.getX());
-                y0 = (float) (mts.getY());
+            GeoPoint screen = mapDrawable.mapToScreen(point);
+            if (previous == null || segment != previousSegment) {
+                mSegmentStarts.add(mTrackpoints.size());
+            } else {
+                canvas.drawLine((float) previous.getX(), (float) previous.getY(),
+                        (float) screen.getX(), (float) screen.getY(), mPaint);
             }
-
-            mTrackpoints.add(new GeoPoint(x0, y0));
+            mTrackpoints.add(screen);
+            previous = screen;
+            previousSegment = segment;
         }
     }
-
 
     public void setLineColor(int color)
     {

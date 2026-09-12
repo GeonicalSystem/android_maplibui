@@ -11,7 +11,6 @@ import android.media.AudioManager;
 import android.media.ToneGenerator;
 import android.location.Location;
 import android.location.LocationListener;
-import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -24,14 +23,12 @@ import com.hypertrack.hyperlog.HyperLog;
 import com.nextgis.maplib.util.Constants;
 import com.nextgis.maplib.util.LocationTrackFilter;
 
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * Plays a fixed-rate heartbeat while recording receives fresh usable coordinates and the app UI
- * is hidden. A separate zero-distance location subscription distinguishes a stationary device
- * from Android no longer delivering fixes; it never feeds points into the recorded geometry.
+ * is hidden. The owning service feeds the shared validated GNSS stream before decimation,
+ * so stationary fixes confirm health without opening another location subscription.
  */
 public final class BackgroundRecordingSoundMonitor implements LocationListener {
     private static final int TONE_VOLUME_PERCENT = 45;
@@ -39,16 +36,12 @@ public final class BackgroundRecordingSoundMonitor implements LocationListener {
     private static final int ERROR_DURATION_MS = 350;
     private static final long HEARTBEAT_VIBRATION_MS = 80L;
     private static final long[] ERROR_VIBRATION_PATTERN = {0L, 80L, 70L, 80L};
-    private static final long HEALTH_LOCATION_INTERVAL_MS = 2_000L;
 
     private final Context mContext;
     private final SharedPreferences mPreferences;
     private final BackgroundRecordingSoundPolicy mPolicy = new BackgroundRecordingSoundPolicy();
     private final Handler mHandler = new Handler(Looper.getMainLooper());
     private final Runnable mHeartbeatRunnable = this::runHeartbeat;
-    private final Set<String> mRegisteredProviders = new HashSet<>();
-    private LocationManager mLocationManager;
-    private PowerManager.WakeLock mWakeLock;
     private ToneGenerator mToneGenerator;
     private boolean mStarted;
     private long mLastUsableLocationAtMs = Long.MIN_VALUE;
@@ -60,31 +53,13 @@ public final class BackgroundRecordingSoundMonitor implements LocationListener {
     }
 
     /**
-     * Starts the health-only location stream and fixed 10-second heartbeat schedule.
-     * Providers must be the same providers that the owning recording service accepted.
+     * Starts the fixed 10-second heartbeat schedule; the owner supplies validated fixes.
      */
-    public synchronized void start(LocationManager locationManager, String... providers) {
-        if (mStarted) {
-            return;
-        }
-        mLocationManager = locationManager;
-        if (mLocationManager == null) {
-            return;
-        }
-
-        if (providers != null) {
-            for (String provider : providers) {
-                registerHealthProvider(provider);
-            }
-        }
-        if (mRegisteredProviders.isEmpty()) {
-            return;
-        }
-
+    public synchronized void start() {
+        if (mStarted) return;
         mStarted = true;
         long nowMs = SystemClock.elapsedRealtime();
         mNextHeartbeatAtMs = nowMs + BackgroundRecordingSoundPolicy.HEARTBEAT_INTERVAL_MS;
-        syncWakeLock();
         scheduleNextHeartbeat(nowMs);
     }
 
@@ -103,20 +78,8 @@ public final class BackgroundRecordingSoundMonitor implements LocationListener {
     public synchronized void release() {
         mStarted = false;
         mHandler.removeCallbacks(mHeartbeatRunnable);
-        if (mLocationManager != null) {
-            try {
-                mLocationManager.removeUpdates(this);
-            } catch (RuntimeException ex) {
-                HyperLog.w(Constants.TAG,
-                        "BackgroundRecordingSoundMonitor removeUpdates failure: "
-                                + ex.getMessage(), ex);
-            }
-        }
-        mRegisteredProviders.clear();
-        mLocationManager = null;
         mLastUsableLocationAtMs = Long.MIN_VALUE;
         mNextHeartbeatAtMs = Long.MIN_VALUE;
-        releaseWakeLock();
         if (mToneGenerator != null) {
             mToneGenerator.release();
             mToneGenerator = null;
@@ -125,9 +88,9 @@ public final class BackgroundRecordingSoundMonitor implements LocationListener {
 
     @Override
     public synchronized void onLocationChanged(Location location) {
-        if (mStarted && LocationTrackFilter.passesBasicIntegrity(location)) {
-            // Callback receipt time, rather than coordinate change, is the health signal.
-            mLastUsableLocationAtMs = SystemClock.elapsedRealtime();
+        if (mStarted && LocationTrackFilter.passesRecordingIntegrity(location)) {
+            // Batches and replayed cache entries must not renew health at receipt time.
+            mLastUsableLocationAtMs = location.getElapsedRealtimeNanos() / 1_000_000L;
         }
     }
 
@@ -151,7 +114,6 @@ public final class BackgroundRecordingSoundMonitor implements LocationListener {
             return;
         }
         long nowMs = SystemClock.elapsedRealtime();
-        syncWakeLock();
         if (mPolicy.shouldPlayHeartbeat(
                 isEnabled(), isAppUiHidden(), mLastUsableLocationAtMs, nowMs)
                 && emitSignal(ToneGenerator.TONE_PROP_BEEP, HEARTBEAT_DURATION_MS, false)) {
@@ -170,69 +132,8 @@ public final class BackgroundRecordingSoundMonitor implements LocationListener {
         mHandler.postDelayed(mHeartbeatRunnable, Math.max(1L, mNextHeartbeatAtMs - nowMs));
     }
 
-    private void registerHealthProvider(String provider) {
-        if (provider == null || mRegisteredProviders.contains(provider)) {
-            return;
-        }
-        try {
-            if (!mLocationManager.getAllProviders().contains(provider)) {
-                return;
-            }
-            mLocationManager.requestLocationUpdates(
-                    provider, HEALTH_LOCATION_INTERVAL_MS, 0f, this);
-            mRegisteredProviders.add(provider);
-            HyperLog.v(Constants.TAG,
-                    "BackgroundRecordingSoundMonitor health updates provider=" + provider
-                            + " minTimeMs=" + HEALTH_LOCATION_INTERVAL_MS
-                            + " minDistanceM=0");
-        } catch (RuntimeException ex) {
-            HyperLog.w(Constants.TAG,
-                    "BackgroundRecordingSoundMonitor request updates " + provider + ": "
-                            + ex.getMessage(), ex);
-        }
-    }
-
-    private void syncWakeLock() {
-        if (!isEnabled()) {
-            releaseWakeLock();
-            return;
-        }
-        if (mWakeLock != null && mWakeLock.isHeld()) {
-            return;
-        }
-        PowerManager powerManager =
-                (PowerManager) mContext.getSystemService(Context.POWER_SERVICE);
-        if (powerManager == null) {
-            return;
-        }
-        try {
-            mWakeLock = powerManager.newWakeLock(
-                    PowerManager.PARTIAL_WAKE_LOCK,
-                    mContext.getPackageName() + ":BackgroundRecordingSound");
-            mWakeLock.setReferenceCounted(false);
-            mWakeLock.acquire();
-        } catch (RuntimeException ex) {
-            HyperLog.w(Constants.TAG,
-                    "BackgroundRecordingSoundMonitor wake lock failure: " + ex.getMessage(), ex);
-            mWakeLock = null;
-        }
-    }
-
-    private void releaseWakeLock() {
-        if (mWakeLock == null) {
-            return;
-        }
-        try {
-            if (mWakeLock.isHeld()) {
-                mWakeLock.release();
-            }
-        } catch (RuntimeException ex) {
-            HyperLog.w(Constants.TAG,
-                    "BackgroundRecordingSoundMonitor wake lock release failure: "
-                            + ex.getMessage(), ex);
-        } finally {
-            mWakeLock = null;
-        }
+    public synchronized void onLocationUnavailable() {
+        mLastUsableLocationAtMs = Long.MIN_VALUE;
     }
 
     private boolean isEnabled() {

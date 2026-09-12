@@ -154,7 +154,7 @@ public class ExportGPXTask extends AsyncTask<Void, Integer, Object>
                 track = mActivity.getContentResolver().query(mContentUriTracks,
                                                              new String[]{TrackLayer.FIELD_NAME}, TrackLayer.FIELD_ID + " = ?", new String[]{trackId}, null);
                 trackpoints = mActivity.getContentResolver().query(Uri.withAppendedPath(mContentUriTracks,
-                                                                                        trackId), null, null, null, TrackLayer.FIELD_TIMESTAMP + " ASC");
+                                                                                        trackId), null, null, null, TrackLayer.POINT_ORDER);
 
                 if (track != null && track.moveToFirst()) {
                     if (mSeparateFiles) {
@@ -216,6 +216,8 @@ public class ExportGPXTask extends AsyncTask<Void, Integer, Object>
         int satId = trackpoints.getColumnIndex(TrackLayer.FIELD_SAT);
 //        int fixId = trackpoints.getColumnIndex(TrackLayer.FIELD_FIX);
         int bearing = trackpoints.getColumnIndex(TrackLayer.FIELD_BEARING);
+        int segmentColumn = trackpoints.getColumnIndexOrThrow(TrackLayer.FIELD_SEGMENT);
+        int previousSegment = trackpoints.getInt(segmentColumn);
         int accurancy_hdop = trackpoints.getColumnIndex(TrackLayer.FIELD_ACCURACY);
 
         DecimalFormat df = new DecimalFormat("0", new DecimalFormatSymbols(Locale.ENGLISH));
@@ -238,6 +240,11 @@ public class ExportGPXTask extends AsyncTask<Void, Integer, Object>
 
         do {
             sb.setLength(0);
+            int segment = trackpoints.getInt(segmentColumn);
+            if (segment != previousSegment) {
+                sb.append(GPX_TAG_TRACK_SEGMENT_CLOSE).append(GPX_TAG_TRACK_SEGMENT);
+                previousSegment = segment;
+            }
             point.setCoordinates(trackpoints.getDouble(lonId), trackpoints.getDouble(latId));
             point.setCRS(CRS_WEB_MERCATOR);
             point.project(CRS_WGS84);

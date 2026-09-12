@@ -2,12 +2,18 @@ schema_version: 1
 module_id: maplibui
 repository_id: maplibui
 maturity: maintained
-last_verified: 2026-08-26
+last_verified: 2026-09-12
 entrypoints:
   - maplibui/src/main/java/com/nextgis/maplibui/GISApplication.java
   - maplibui/src/main/java/com/nextgis/maplibui/service/LayerFillService.java
   - maplibui/src/main/java/com/nextgis/maplibui/activity/SelectNGWResourceActivity.java
 key_components:
+  - path: maplibui/src/main/java/com/nextgis/maplibui/service/WalkGeometryInsertion.java
+    responsibility: Keep walked nodes at the selected insertion position and refine only the last vertex owned by the current recording session.
+  - path: maplibui/src/main/java/com/nextgis/maplibui/overlay/CurrentTrackOverlay.java
+    responsibility: Keep active track segment boundaries through Canvas draw, pan and zoom.
+  - path: maplibui/src/main/java/com/nextgis/maplibui/util/ExportGPXTask.java
+    responsibility: Export persisted GNSS segments as separate GPX trkseg elements in insertion order.
   - path: maplibui/build.gradle
     responsibility: Compile MapLibre UI against the same explicit MapLibre 13.0.2 OpenGL artifact as app and maplib so the final runtime does not require Vulkan.
   - path: maplibui/src/main/java/com/nextgis/maplibui/dialog/NGWResourcesListAdapter.java
@@ -45,13 +51,13 @@ key_components:
   - path: maplibui/src/main/java/com/nextgis/maplibui/util/CollectorFormFileTransaction.java
     responsibility: Install or recover the form and metadata sidecars as one validated transaction.
   - path: maplibui/src/main/java/com/nextgis/maplibui/util/LayerBackupManager.java
-    responsibility: Export layer data before destructive rebuild or removal.
+    responsibility: Export layer tables and only attachment files physically present on this device before destructive rebuild or removal, without downloading server-only payloads.
   - path: maplibui/src/main/java/com/nextgis/maplibui/service/TrackerService.java
-    responsibility: Run in the default application process so toolbar Start is executed before a later Stop, reject stale delayed starts after the durable intent was disabled, persist that intent without cross-process preference caching, record validated movement through 160 km/h using tracks-only provider settings and GPS-first/network-fallback arbitration, flush delayed fixes, run fresh-location-gated fixed-rate background sound health feedback independently of point inserts, stop safely without starting a forbidden location foreground service when permission is revoked, and silently resume after process death, reboot or restored permission.
+    responsibility: Keep ordered Start/Stop and durable recording intent in the application process; consume shared validated GNSS, decimate after filtering, persist segment boundaries, flush only validated points and retain an unfinished track on unexpected termination; explicit Stop closes the track and clears durable intent.
   - path: maplibui/src/main/java/com/nextgis/maplibui/service/WalkEditService.java
-    responsibility: Journal unfinished walk geometry plus stable part/ring/insertion target and geometry identity for type-correct cold UI reconstruction without polygon fill on lines, insert validated movement after the selected node through 160 km/h using ordinary-location provider settings and GPS-first/network-fallback arbitration, flush delayed vertices, run fresh-location-gated fixed-rate background sound health feedback independently of draft commits, retain the draft when location permission is revoked without starting a forbidden location foreground service, and distinguish explicit Save/Cancel from unexpected termination.
+    responsibility: Consume shared validated GNSS, persist geometry and insertion target with gps_paused, require explicit reconnection after GPS loss or draft recovery, and flush the final durable snapshot before Save without a raw-location tail.
   - path: maplibui/src/main/java/com/nextgis/maplibui/util/BackgroundRecordingSoundMonitor.java
-    responsibility: Register a health-only zero-distance location listener, keep a partial wake lock while enabled, and play an exact ten-second alarm-stream heartbeat only while the UI is hidden and usable fixes remain fresh; zero or muted alarm volume falls back to short vibration, while persistence errors retain an independent tone or double vibration.
+    responsibility: Consume the shared validated GNSS stream before geometry sampling, use measurement age for the ten-second background heartbeat, rely on source-owned recording wake lock and retain existing alarm/vibration and persistence-failure feedback.
   - path: maplibui/src/main/java/com/nextgis/maplibui/util/BackgroundRecordingSoundPolicy.java
     responsibility: Provide Android-independent fresh-location gating, alarm-volume output selection, 10-second heartbeat throttling and one-minute persistence-failure throttling for background recording feedback.
   - path: maplibui/src/main/java/com/nextgis/maplibui/util/FeatureFormDraftStore.java
@@ -107,6 +113,7 @@ storage_contracts:
     path: maplibui/src/main/java/com/nextgis/maplibui/util/GeometryEditDraftStore.java
 invariant_refs: [INV-NGW-ACCOUNT-IDENTITY, INV-NGW-RESOURCE-DIALOG-LIFECYCLE, INV-LAYER-ORDER, INV-TRACK-LAYER-TOP, INV-HOT-ADD-CONSISTENCY, INV-MAPLIBRE-BACKEND-COMPATIBILITY, INV-COLLECTOR-RESOURCE, INV-COLLECTOR-LAYER-IDENTITY, INV-COLLECTOR-RASTER-STYLES, INV-COLLECTOR-ISOLATION, INV-COLLECTOR-EDITABILITY, INV-COLLECTOR-RESUMABLE, INV-COLLECTOR-FORM-ATOMIC, INV-PROJECT-OPERATION-EXCLUSION, INV-NGRC-PRESERVE, INV-LEGACY-UNDERLAY-MIGRATION, INV-SYNC-ACCOUNT-ISOLATION, INV-BACKUP-BEFORE-DESTRUCTION, INV-NO-TRACK-FLAGS, INV-CRASH-DRAFT-RECOVERY, INV-MULTIPOLYGON-REPAIR, INV-GEOMETRY-SKETCH-WORKFLOW, INV-GPS-TRACK-FILTER, INV-LOCAL-VECTOR-LAYERS]
 global_docs:
+  - docs/architecture/location-pipeline.md
   - docs/architecture/map-rendering.md
   - docs/architecture/collector-projects.md
   - docs/architecture/ngw-sync-and-storage.md

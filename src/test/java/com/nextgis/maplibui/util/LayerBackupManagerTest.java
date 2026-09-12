@@ -9,6 +9,10 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.zip.ZipFile;
+import java.util.zip.ZipOutputStream;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -69,14 +73,46 @@ public class LayerBackupManagerTest {
         assertTrue(only.exists());
     }
 
+    @Test
+    public void writeLocalAttachmentFiles_archivesOnlyFilesPresentOnDevice() throws Exception {
+        File layer = temporaryFolder.newFolder("layer");
+        File selectedFeature = new File(layer, "10");
+        File otherFeature = new File(layer, "20");
+        assertTrue(selectedFeature.mkdir());
+        assertTrue(otherFeature.mkdir());
+        writeFile(selectedFeature, "5", 12);
+        writeFile(selectedFeature, "META", 8);
+        writeFile(otherFeature, "6", 10);
+
+        File archive = temporaryFolder.newFile("attachments.zip");
+        Set<Long> selectedIds = new HashSet<>(Collections.singletonList(10L));
+        try (ZipOutputStream output = new ZipOutputStream(new FileOutputStream(archive))) {
+            LayerBackupManager.writeLocalAttachmentFiles(output, layer, selectedIds);
+        }
+
+        try (ZipFile zip = new ZipFile(archive)) {
+            assertTrue(zip.getEntry("attachments/10/5") != null);
+            assertTrue(zip.getEntry("attachments/10/META") != null);
+            assertTrue(zip.getEntry("attachments/20/6") == null);
+        }
+    }
+
     private File writeZip(File root, String name, int size) throws IOException {
         File file = new File(root, name);
+        writeBytes(file, size);
+        assertTrue(file.setLastModified(System.currentTimeMillis()));
+        return file;
+    }
+
+    private void writeFile(File root, String name, int size) throws IOException {
+        writeBytes(new File(root, name), size);
+    }
+
+    private void writeBytes(File file, int size) throws IOException {
         try (FileOutputStream out = new FileOutputStream(file)) {
             byte[] payload = new byte[size];
             Arrays.fill(payload, (byte) 7);
             out.write(payload);
         }
-        assertTrue(file.setLastModified(System.currentTimeMillis()));
-        return file;
     }
 }

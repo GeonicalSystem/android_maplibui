@@ -558,4 +558,8 @@
 
     <string name="layer_fill_network_retry">Проблема с сетью. Повтор %1$d из %2$d…</string>
 
+    <string name="walk_gps_paused">Запись обхода приостановлена</string>
+    <string name="walk_gps_gap_message">Сигнал GPS потерян. Запись приостановлена. Продолжайте, только если нужно соединить последнюю точку с новой позицией GPS.</string>
+    <string name="walk_gps_resume">Продолжить и соединить</string>
+    <string name="walk_gps_wait">Для продолжения дождитесь свежей позиции GPS.</string>
 </resources>
